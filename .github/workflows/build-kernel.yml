@@ -97,14 +97,11 @@ jobs:
         run: |
           set -euxo pipefail
           cd "$GITHUB_WORKSPACE/android-kernel/common"
-          # Remove ABI protected exports to prevent Wifi & Bluetooth errors.
-          rm -rf ./android/abi_gki_protected_exports_*
-          perl -0pi -e 's/^\s*"protected_exports_list"\s*:\s*"android\/abi_gki_protected_exports_aarch64",\s*$//m' ./BUILD.bazel
           
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add .
-          git commit -m "Make clean to remove dirty flags"
+          git commit -m "Make clean to remove dirty flags" || true
           
       - name: Build Kernel
         working-directory: ${{ github.workspace }}/android-kernel
@@ -115,11 +112,7 @@ jobs:
           else
             # Copy fragment to kernel tree for bazel
             cp "$GITHUB_WORKSPACE/android-kernel/wild_gki.fragment" common/arch/arm64/configs/wild_gki.fragment
-            if [[ "$ANDROID_VERSION" == "android14_or_lower" ]]; then
-              tools/bazel build --config=fast --defconfig_fragment=//common:arch/arm64/configs/wild_gki.fragment //common:kernel_aarch64_dist || exit 1
-            else
-              tools/bazel build --config=fast --defconfig_fragment=//common:arch/arm64/configs/wild_gki.fragment //common:kernel_aarch64_dist || exit 1
-            fi
+            tools/bazel build --config=fast --verbose_failures --keep_going --defconfig_fragment=//common:arch/arm64/configs/wild_gki.fragment //common:kernel_aarch64_dist || exit 1
           fi
 
       - name: Verify build output
@@ -169,42 +162,47 @@ jobs:
       - name: Collect kernel headers and Module.symvers
         run: |
           set -exuo pipefail
-          OUTDIR_FULL=$(echo "${{ matrix.branch }}" | sed 's/^common-//')
-          OUTDIR_BASE=$(echo "$OUTDIR_FULL" | sed 's/-lts$//')
           HEADERS_DIR="$GITHUB_WORKSPACE/kernel-headers"
           mkdir -p "$HEADERS_DIR"
 
-          # Try bazel output first
+          # Search for Module.symvers everywhere
+          echo "=== Searching for Module.symvers ==="
+          find "$GITHUB_WORKSPACE/android-kernel" -name "Module.symvers" -maxdepth 6 2>/dev/null || true
+
+          # Copy from bazel-bin
           BAZEL_OUT="$GITHUB_WORKSPACE/android-kernel/bazel-bin/common/kernel_aarch64"
           if [ -d "$BAZEL_OUT" ]; then
             echo "Using bazel output: $BAZEL_OUT"
-            # Copy Module.symvers
             find "$BAZEL_OUT" -name "Module.symvers" -exec cp {} "$HEADERS_DIR/" \; 2>/dev/null || true
-            # Copy kernel headers
-            if [ -d "$BAZEL_OUT/kernel_headers" ]; then
-              cp -a "$BAZEL_OUT/kernel_headers" "$HEADERS_DIR/include_install"
-            fi
-            # Copy common/ source tree headers (for make headers_install)
-            if [ -d "$GITHUB_WORKSPACE/android-kernel/common" ]; then
-              cp -a "$GITHUB_WORKSPACE/android-kernel/common" "$HEADERS_DIR/common-src"
-            fi
+            # Copy kernel_modules or kernel_headers
+            for d in kernel_modules kernel_headers out; do
+              [ -d "$BAZEL_OUT/$d" ] && cp -a "$BAZEL_OUT/$d" "$HEADERS_DIR/$d" 2>/dev/null || true
+            done
+            # Copy the entire bazel output as a fallback
+            cp -a "$BAZEL_OUT" "$HEADERS_DIR/bazel-output" 2>/dev/null || true
           fi
 
-          # Try make.sh / build.sh output
-          DIST_OUT="$GITHUB_WORKSPACE/android-kernel/out/$OUTDIR_FULL/dist"
-          DIST_OUT_BASE="$GITHUB_WORKSPACE/android-kernel/out/$OUTDIR_BASE/dist"
-          if [ -d "$DIST_OUT" ]; then
-            echo "Using build.sh output: $DIST_OUT"
-            cp -a "$DIST_OUT"/* "$HEADERS_DIR/" 2>/dev/null || true
-          elif [ -d "$DIST_OUT_BASE" ]; then
-            echo "Using build.sh output: $DIST_OUT_BASE"
-            cp -a "$DIST_OUT_BASE"/* "$HEADERS_DIR/" 2>/dev/null || true
-          fi
-
-          # Ensure Module.symvers exists
-          if [ ! -f "$HEADERS_DIR/Module.symvers" ]; then
-            find "$GITHUB_WORKSPACE/android-kernel" -name "Module.symvers" -maxdepth 5 | head -5
-            echo "WARNING: Module.symvers not found in expected locations"
+          # Copy the common/ source tree (has headers, Makefile, Kconfig, etc.)
+          if [ -d "$GITHUB_WORKSPACE/android-kernel/common" ]; then
+            echo "Copying common/ source tree for headers..."
+            # Don't copy everything - just what's needed for module builds
+            mkdir -p "$HEADERS_DIR/common"
+            cd "$GITHUB_WORKSPACE/android-kernel/common"
+            for d in include arch scripts drivers/of sound include/dt-bindings; do
+              [ -d "$d" ] && mkdir -p "$HEADERS_DIR/common/$(dirname $d)" && cp -a "$d" "$HEADERS_DIR/common/$(dirname $d)/" 2>/dev/null || true
+            done
+            # Copy essential top-level files
+            cp -a Makefile Kconfig Kbuild Module.symvers 2>/dev/null \
+              Module.symvers 2>/dev/null \
+              "$HEADERS_DIR/common/" 2>/dev/null || true
+            cp Makefile Kconfig Kbuild "$HEADERS_DIR/common/" 2>/dev/null || true
+            [ -f Module.symvers ] && cp Module.symvers "$HEADERS_DIR/common/" 2>/dev/null || true
+            # Copy arch/arm64 fully (needed for module builds)
+            cp -a arch/arm64 "$HEADERS_DIR/common/arch/arm64" 2>/dev/null || true
+            # Copy include fully
+            cp -a include "$HEADERS_DIR/common/include" 2>/dev/null || true
+            # Copy scripts (needed for module compilation)
+            cp -a scripts "$HEADERS_DIR/common/scripts" 2>/dev/null || true
           fi
 
           # Create tar archive
