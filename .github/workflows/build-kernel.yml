@@ -6,7 +6,7 @@ on:
       ksu_branch:
         description: Wild KSU branch/commit/tag to setup
         required: false
-        default: v3.1.2
+        default: stable
   push:
     branches:
       - dev
@@ -30,7 +30,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 120
     env:
-      KSU_BRANCH: ${{ inputs.ksu_branch || 'v3.1.2' }}
+      KSU_BRANCH: ${{ inputs.ksu_branch || 'stable' }}
     strategy:
       fail-fast: false
       matrix:
@@ -73,7 +73,7 @@ jobs:
         run: |
           set -euxo pipefail
           cd "$GITHUB_WORKSPACE/android-kernel"
-          bash <(curl -LSs "https://raw.githubusercontent.com/WildKernels/Wild_KSU/dev/kernel/setup.sh") -p "$KSU_BRANCH"
+          bash <(curl -LSs "https://raw.githubusercontent.com/WildKernels/Wild_KSU/dev/kernel/setup.sh") "$KSU_BRANCH"
 
       - name: Write KSU fragment
         run: |
