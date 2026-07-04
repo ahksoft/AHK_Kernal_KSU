@@ -36,13 +36,6 @@ jobs:
       matrix:
         branch:
           - common-android12-5.10-lts
-          - common-android13-5.10-lts
-          - common-android13-5.15-lts
-          - common-android14-5.15-lts
-          - common-android14-6.1-2025-09
-          - common-android14-6.1-lts
-          - common-android15-6.6-lts
-          - common-android16-6.12-lts
 
     steps:
       - name: Free Disk Space
@@ -172,3 +165,57 @@ jobs:
           path: ${{ github.workspace }}/AnyKernel3
           if-no-files-found: error
           compression-level: 9
+
+      - name: Collect kernel headers and Module.symvers
+        run: |
+          set -exuo pipefail
+          OUTDIR_FULL=$(echo "${{ matrix.branch }}" | sed 's/^common-//')
+          OUTDIR_BASE=$(echo "$OUTDIR_FULL" | sed 's/-lts$//')
+          HEADERS_DIR="$GITHUB_WORKSPACE/kernel-headers"
+          mkdir -p "$HEADERS_DIR"
+
+          # Try bazel output first
+          BAZEL_OUT="$GITHUB_WORKSPACE/android-kernel/bazel-bin/common/kernel_aarch64"
+          if [ -d "$BAZEL_OUT" ]; then
+            echo "Using bazel output: $BAZEL_OUT"
+            # Copy Module.symvers
+            find "$BAZEL_OUT" -name "Module.symvers" -exec cp {} "$HEADERS_DIR/" \; 2>/dev/null || true
+            # Copy kernel headers
+            if [ -d "$BAZEL_OUT/kernel_headers" ]; then
+              cp -a "$BAZEL_OUT/kernel_headers" "$HEADERS_DIR/include_install"
+            fi
+            # Copy common/ source tree headers (for make headers_install)
+            if [ -d "$GITHUB_WORKSPACE/android-kernel/common" ]; then
+              cp -a "$GITHUB_WORKSPACE/android-kernel/common" "$HEADERS_DIR/common-src"
+            fi
+          fi
+
+          # Try make.sh / build.sh output
+          DIST_OUT="$GITHUB_WORKSPACE/android-kernel/out/$OUTDIR_FULL/dist"
+          DIST_OUT_BASE="$GITHUB_WORKSPACE/android-kernel/out/$OUTDIR_BASE/dist"
+          if [ -d "$DIST_OUT" ]; then
+            echo "Using build.sh output: $DIST_OUT"
+            cp -a "$DIST_OUT"/* "$HEADERS_DIR/" 2>/dev/null || true
+          elif [ -d "$DIST_OUT_BASE" ]; then
+            echo "Using build.sh output: $DIST_OUT_BASE"
+            cp -a "$DIST_OUT_BASE"/* "$HEADERS_DIR/" 2>/dev/null || true
+          fi
+
+          # Ensure Module.symvers exists
+          if [ ! -f "$HEADERS_DIR/Module.symvers" ]; then
+            find "$GITHUB_WORKSPACE/android-kernel" -name "Module.symvers" -maxdepth 5 | head -5
+            echo "WARNING: Module.symvers not found in expected locations"
+          fi
+
+          # Create tar archive
+          cd "$GITHUB_WORKSPACE"
+          tar czf kernel-headers.tar.gz kernel-headers/
+          echo "Kernel headers archive size: $(du -sh kernel-headers.tar.gz | cut -f1)"
+
+      - name: Upload Kernel Headers Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.branch }}-Headers
+          path: ${{ github.workspace }}/kernel-headers.tar.gz
+          if-no-files-found: warn
+          compression-level: 1
