@@ -1,0 +1,101 @@
+name: Build GKI Headers
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+
+    steps:
+      - name: Install repo tool
+        run: |
+          mkdir -p "$GITHUB_WORKSPACE/bin"
+          curl -L https://storage.googleapis.com/git-repo-downloads/repo -o "$GITHUB_WORKSPACE/bin/repo"
+          chmod +x "$GITHUB_WORKSPACE/bin/repo"
+          echo "$GITHUB_WORKSPACE/bin" >> "$GITHUB_PATH"
+
+      - name: Prepare kernel source
+        run: |
+          set -euxo pipefail
+          mkdir -p "$GITHUB_WORKSPACE/android-kernel"
+          cd "$GITHUB_WORKSPACE/android-kernel"
+          repo init -u https://android.googlesource.com/kernel/manifest -b common-android12-5.10-lts --depth=1
+          repo --trace sync -c -j"$(nproc --all)" --fail-fast --no-tags --force-sync --no-clone-bundle --optimized-fetch --prune --current-branch
+
+      - name: Build Kernel
+        working-directory: ${{ github.workspace }}/android-kernel
+        run: |
+          set -exuo pipefail
+          if [ -f "build/build.sh" ]; then
+            SKIP_MRPROPER=1 BUILD_CONFIG=common/build.config.gki.aarch64 build/build.sh || exit 1
+          else
+            tools/bazel build --config=fast --verbose_failures --keep_going //common:kernel_aarch64_dist || exit 1
+          fi
+
+      - name: Collect build output
+        run: |
+          set -exuo pipefail
+          OUTDIR="$GITHUB_WORKSPACE/build-output"
+          mkdir -p "$OUTDIR"
+
+          # Find and copy Module.symvers
+          echo "=== Searching for Module.symvers ==="
+          find "$GITHUB_WORKSPACE/android-kernel" -name "Module.symvers" -maxdepth 6 2>/dev/null | head -10
+          find "$GITHUB_WORKSPACE/android-kernel" -name "Module.symvers" -maxdepth 6 -exec cp {} "$OUTDIR/" \; 2>/dev/null || true
+
+          # Copy kernel image
+          BAZEL_OUT="$GITHUB_WORKSPACE/android-kernel/bazel-bin/common/kernel_aarch64"
+          if [ -d "$BAZEL_OUT" ]; then
+            find "$BAZEL_OUT" -name "Image" -exec cp {} "$OUTDIR/" \; 2>/dev/null || true
+            find "$BAZEL_OUT" -name "*.ko" -exec cp {} "$OUTDIR/" 2>/dev/null || true
+            # Copy entire bazel output
+            cp -a "$BAZEL_OUT" "$OUTDIR/bazel-out" 2>/dev/null || true
+          fi
+
+          # Copy kernel headers from common/
+          cd "$GITHUB_WORKSPACE/android-kernel/common"
+          mkdir -p "$OUTDIR/headers"
+          for d in include arch scripts; do
+            [ -d "$d" ] && cp -a "$d" "$OUTDIR/headers/" 2>/dev/null || true
+          done
+          cp -a arch/arm64 "$OUTDIR/headers/arch/arm64" 2>/dev/null || true
+          cp Makefile Kconfig Kbuild "$OUTDIR/headers/" 2>/dev/null || true
+          [ -f Module.symvers ] && cp Module.symvers "$OUTDIR/headers/" 2>/dev/null || true
+          # Copy .config for reference
+          find "$GITHUB_WORKSPACE/android-kernel" -name ".config" -maxdepth 5 -exec cp {} "$OUTDIR/headers/" \; 2>/dev/null || true
+
+          cd "$GITHUB_WORKSPACE"
+          tar czf build-output.tar.gz build-output/
+          echo "Archive size: $(du -sh build-output.tar.gz | cut -f1)"
+
+      - name: Upload Build Output
+        uses: actions/upload-artifact@v4
+        with:
+          name: gki-android12-5.10-build-output
+          path: ${{ github.workspace }}/build-output.tar.gz
+          if-no-files-found: error
+          compression-level: 1
+
+      - name: Prepare AnyKernel3
+        run: |
+          set -euxo pipefail
+          git clone --depth 1 -b gki-2.0 https://github.com/WildKernels/AnyKernel3.git "$GITHUB_WORKSPACE/AnyKernel3"
+          BAZEL_OUT="$GITHUB_WORKSPACE/android-kernel/bazel-bin/common/kernel_aarch64"
+          if [ -f "$BAZEL_OUT/Image" ]; then
+            cp "$BAZEL_OUT/Image" "$GITHUB_WORKSPACE/AnyKernel3/Image"
+          elif [ -f "$GITHUB_WORKSPACE/android-kernel/out/android12-5.10/dist/Image" ]; then
+            cp "$GITHUB_WORKSPACE/android-kernel/out/android12-5.10/dist/Image" "$GITHUB_WORKSPACE/AnyKernel3/Image"
+          fi
+
+      - name: Upload AnyKernel3
+        uses: actions/upload-artifact@v4
+        with:
+          name: gki-android12-5.10-AnyKernel3
+          path: ${{ github.workspace }}/AnyKernel3
+          if-no-files-found: error
+          compression-level: 9
