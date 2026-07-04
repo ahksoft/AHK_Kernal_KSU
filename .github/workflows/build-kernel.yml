@@ -6,7 +6,7 @@ on:
       ksu_branch:
         description: Wild KSU branch/commit/tag to setup
         required: false
-        default: dev
+        default: v3.1.2
   push:
     branches:
       - dev
@@ -30,7 +30,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 120
     env:
-      KSU_BRANCH: ${{ inputs.ksu_branch || 'dev' }}
+      KSU_BRANCH: ${{ inputs.ksu_branch || 'v3.1.2' }}
     strategy:
       fail-fast: false
       matrix:
@@ -98,19 +98,10 @@ jobs:
           set -euxo pipefail
           cd "$GITHUB_WORKSPACE/android-kernel/common"
           
-          # Fix dev branch KSU files missing includes for android12-5.10
-          KSU_HDR='#include <linux/kernel.h>\n#include <linux/types.h>\n#include <linux/stddef.h>\n#include <linux/compiler.h>\n#include <linux/printk.h>\n#include <linux/mm.h>\n#include <linux/uaccess.h>\n#include <linux/sched.h>\n#include <linux/sched/task_stack.h>\n#include <linux/cred.h>\n#include <linux/fs.h>\n#include <linux/version.h>\n#include <linux/string.h>\n#include <linux/slab.h>\n#include <linux/preempt.h>\n#include <asm/current.h>\n#include <linux/ptrace.h>\n#include <linux/mm_types.h>'
-          for f in drivers/kernelsu/sucompat.c drivers/kernelsu/ksu.c drivers/kernelsu/allowlist.c drivers/kernelsu/apk_sign.c drivers/kernelsu/supercalls.c drivers/kernelsu/feature.c drivers/kernelsu/ksud.c; do
-            if [ -f "$f" ] && ! head -1 "$f" | grep -q '#include'; then
-              sed -i "1i\\$KSU_HDR" "$f"
-              echo "Patched: $f"
-            fi
-          done
-          
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add .
-          git commit -m "Fix KSU includes and remove dirty flags" || true
+          git commit -m "Make clean to remove dirty flags" || true
           
       - name: Build Kernel
         working-directory: ${{ github.workspace }}/android-kernel
