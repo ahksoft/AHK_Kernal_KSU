@@ -6,7 +6,7 @@ on:
       ksu_branch:
         description: Wild KSU branch/commit/tag to setup
         required: false
-        default: dev
+        default: stable
   push:
     branches:
       - dev
@@ -30,7 +30,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 120
     env:
-      KSU_BRANCH: ${{ inputs.ksu_branch || 'dev' }}
+      KSU_BRANCH: ${{ inputs.ksu_branch || 'stable' }}
     strategy:
       fail-fast: false
       matrix:
@@ -98,10 +98,17 @@ jobs:
           set -euxo pipefail
           cd "$GITHUB_WORKSPACE/android-kernel/common"
           
+          # Fix KSU sucompat.c missing includes (android12-5.10 compat)
+          for f in drivers/kernelsu/sucompat.c drivers/kernelsu/ksu.c drivers/kernelsu/allowlist.c; do
+            if [ -f "$f" ] && ! grep -q '#include.*<linux/' "$f" 2>/dev/null; then
+              sed -i '1i #include <linux/kernel.h>\n#include <linux/types.h>\n#include <linux/uaccess.h>\n#include <linux/string.h>\n#include <linux/sched.h>' "$f"
+            fi
+          done
+          
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add .
-          git commit -m "Make clean to remove dirty flags" || true
+          git commit -m "Fix KSU includes and remove dirty flags" || true
           
       - name: Build Kernel
         working-directory: ${{ github.workspace }}/android-kernel
